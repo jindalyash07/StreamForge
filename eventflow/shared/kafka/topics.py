@@ -1,0 +1,5 @@
+ORDER_CREATED_TOPIC = "order.created"
+PAYMENT_SUCCESS_TOPIC = "payment.success"
+PAYMENT_FAILED_TOPIC = "payment.failed"
+NOTIFICATION_SENT_TOPIC = "notification.sent"
+DEAD_LETTER_QUEUE_TOPIC = "dead.letter.queue"
