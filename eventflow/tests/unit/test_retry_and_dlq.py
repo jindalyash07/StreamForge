@@ -57,8 +57,12 @@ async def test_publish_to_dlq_records_payload(fake_producer) -> None:
         attempts=3,
     )
 
-    assert fake_producer.sent[0][0] == DEAD_LETTER_QUEUE_TOPIC
-    assert "boom" in fake_producer.sent[0][1]
+    topic, payload = fake_producer.sent[0]
+    assert topic == DEAD_LETTER_QUEUE_TOPIC
+    assert payload["error"] == "boom"
+    assert payload["original_topic"] == "order.created"
+    assert payload["event"] == event
+    assert payload["attempts"] == 3
 
 
 @pytest.mark.asyncio
@@ -89,3 +93,76 @@ async def test_worker_routes_failed_message_to_dlq(session_factory, fake_produce
 
     assert handled is False
     assert fake_producer.sent[0][0] == DEAD_LETTER_QUEUE_TOPIC
+
+
+@pytest.mark.asyncio
+async def test_worker_sends_malformed_message_to_dlq_without_retry(session_factory, fake_producer) -> None:
+    calls = {"count": 0}
+
+    async def handler(event: EventEnvelope, session, producer) -> None:
+        calls["count"] += 1
+
+    worker = KafkaWorker(
+        service_name="payment-service",
+        bootstrap_servers="unused:9092",
+        topics=["order.created"],
+        group_id="payment-service-group",
+        handler=handler,
+        session_factory=session_factory,
+        producer=fake_producer,
+    )
+
+    handled = await worker.process_message("order.created", {"not": "an envelope"})
+
+    assert handled is False
+    assert calls["count"] == 0
+    topic, payload = fake_producer.sent[0]
+    assert topic == DEAD_LETTER_QUEUE_TOPIC
+    assert payload["attempts"] == 1
+    assert payload["error"].startswith("invalid event envelope")
+
+
+@pytest.mark.asyncio
+async def test_worker_hands_handlers_the_producer_client_and_signals_commit(session_factory, fake_producer) -> None:
+    seen = {}
+    commits = []
+
+    async def handler(event: EventEnvelope, session, producer) -> None:
+        seen["producer"] = producer
+
+    worker = KafkaWorker(
+        service_name="payment-service",
+        bootstrap_servers="unused:9092",
+        topics=["order.created"],
+        group_id="payment-service-group",
+        handler=handler,
+        session_factory=session_factory,
+        producer=fake_producer,
+        after_commit=lambda: commits.append(True),
+    )
+
+    handled = await worker.process_message(
+        "order.created",
+        {"event_id": "evt-3", "event_type": "order.created", "source": "order-service", "payload": {}},
+    )
+
+    assert handled is True
+    assert seen["producer"] is fake_producer
+    assert commits == [True]
+
+
+def test_producer_client_can_be_built_outside_an_event_loop() -> None:
+    client = KafkaProducerClient("unused:9092", client_id="test")
+
+    with pytest.raises(RuntimeError, match="start"):
+        _ = client.producer
+
+
+def test_service_apps_import_without_a_running_loop() -> None:
+    import analytics_service.app
+    import notification_service.app
+    import order_service.app
+    import payment_service.app
+
+    for module in (order_service.app, payment_service.app, notification_service.app, analytics_service.app):
+        assert module.app is not None

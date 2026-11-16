@@ -24,12 +24,14 @@ class AnalyticsService:
 
             snapshot = await self._get_snapshot(session)
             if event.event_type == ORDER_CREATED_TOPIC:
-                payload = OrderCreatedPayload.model_validate(event.payload)
+                OrderCreatedPayload.model_validate(event.payload)
                 snapshot.total_orders += 1
-                snapshot.total_revenue = Decimal(snapshot.total_revenue) + Decimal(payload.amount)
             elif event.event_type == PAYMENT_SUCCESS_TOPIC:
-                PaymentSuccessPayload.model_validate(event.payload)
+                # Revenue is recognised only once money is actually captured, so declined
+                # orders never inflate it.
+                payload = PaymentSuccessPayload.model_validate(event.payload)
                 snapshot.payment_success_count += 1
+                snapshot.total_revenue = Decimal(snapshot.total_revenue) + Decimal(payload.amount)
             elif event.event_type == PAYMENT_FAILED_TOPIC:
                 PaymentFailedPayload.model_validate(event.payload)
                 snapshot.payment_failed_count += 1
@@ -44,6 +46,28 @@ class AnalyticsService:
             session.add(snapshot)
             await session.flush()
             EVENTS_PROCESSED.labels(self.service_name, event.event_type).inc()
+
+    async def get_summary(self, session: AsyncSession) -> dict:
+        result = await session.execute(select(AnalyticsSnapshot).where(AnalyticsSnapshot.id == 1))
+        snapshot = result.scalar_one_or_none()
+        if snapshot is None:
+            snapshot = AnalyticsSnapshot(
+                total_orders=0,
+                total_revenue=Decimal("0.00"),
+                payment_success_count=0,
+                payment_failed_count=0,
+                notification_sent_count=0,
+                payment_success_rate=Decimal("0.00"),
+            )
+        return {
+            "total_orders": snapshot.total_orders,
+            "total_revenue": str(Decimal(snapshot.total_revenue).quantize(Decimal("0.01"))),
+            "payment_success_count": snapshot.payment_success_count,
+            "payment_failed_count": snapshot.payment_failed_count,
+            "payment_success_rate": str(Decimal(snapshot.payment_success_rate).quantize(Decimal("0.01"))),
+            "notification_sent_count": snapshot.notification_sent_count,
+            "updated_at": snapshot.updated_at.isoformat() if snapshot.updated_at else None,
+        }
 
     async def _get_snapshot(self, session: AsyncSession) -> AnalyticsSnapshot:
         result = await session.execute(select(AnalyticsSnapshot).where(AnalyticsSnapshot.id == 1))

@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 import json
 import logging
 
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from aiokafka import AIOKafkaConsumer
 
+from shared.kafka.client import KafkaProducerClient
 from shared.kafka.topics import DEAD_LETTER_QUEUE_TOPIC
 
 
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 async def publish_to_dlq(
-    producer: AIOKafkaProducer,
+    producer: KafkaProducerClient,
     *,
     service_name: str,
     original_topic: str,
@@ -30,7 +31,7 @@ async def publish_to_dlq(
         "attempts": attempts,
         "failed_at": datetime.now(timezone.utc).isoformat(),
     }
-    await producer.send_and_wait(DEAD_LETTER_QUEUE_TOPIC, json.dumps(payload).encode("utf-8"))
+    await producer.send_event(DEAD_LETTER_QUEUE_TOPIC, payload)
 
 
 async def consume_dlq(bootstrap_servers: str, group_id: str = "dlq-debugger") -> AsyncIterator[dict]:

@@ -5,7 +5,7 @@ import asyncio
 
 from fastapi import Depends, FastAPI, Response
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from shared.config import Settings, get_settings
 from shared.database.session import create_session_factory, init_database
@@ -15,6 +15,7 @@ from shared.kafka.worker import KafkaWorker
 from shared.logging.config import configure_logging
 from shared.logging.middleware import RequestContextMiddleware
 from shared.observability.metrics import HTTP_REQUESTS, SERVICE_HEALTH, metrics_payload
+from shared.outbox import OutboxRelay
 from shared.rate_limiting import RateLimitMiddleware
 
 from notification_service.service import NotificationService
@@ -30,7 +31,13 @@ def create_app(
     session_factory = session_factory or create_session_factory(resolved)
     owns_producer = producer is None
     producer = producer or KafkaProducerClient(resolved.kafka_bootstrap_servers, client_id="notification-service")
-    handler = NotificationService()
+    handler = NotificationService(resolved.service_name)
+    relay = OutboxRelay(
+        service_name=resolved.service_name,
+        session_factory=session_factory,
+        producer=producer,
+        poll_interval_seconds=resolved.outbox_poll_interval_seconds,
+    )
     worker = KafkaWorker(
         service_name=resolved.service_name,
         bootstrap_servers=resolved.kafka_bootstrap_servers,
@@ -38,7 +45,8 @@ def create_app(
         group_id="notification-service-group",
         handler=handler.handle_payment_success,
         session_factory=session_factory,
-        producer=producer.producer,
+        producer=producer,
+        after_commit=relay.notify,
     )
 
     @asynccontextmanager
@@ -47,12 +55,17 @@ def create_app(
         if owns_producer:
             await producer.start()
         consumer_task = asyncio.create_task(worker.start())
+        relay_task = asyncio.create_task(relay.run())
         try:
             yield
         finally:
             consumer_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await consumer_task
+            relay_task.cancel()
+            for task in (consumer_task, relay_task):
+                with suppress(asyncio.CancelledError):
+                    await task
+            with suppress(Exception):
+                await relay.drain()
             if owns_producer:
                 await producer.stop()
 

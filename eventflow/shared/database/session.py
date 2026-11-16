@@ -22,6 +22,7 @@ async def get_session(session_factory: async_sessionmaker[AsyncSession]) -> Asyn
 
 
 async def init_database(session_factory: async_sessionmaker[AsyncSession]) -> None:
-    engine = session_factory.bind
+    # async_sessionmaker keeps its engine in the configured kwargs, not on a .bind attribute.
+    engine = session_factory.kw["bind"]
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

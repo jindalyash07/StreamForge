@@ -5,7 +5,7 @@ import asyncio
 
 from fastapi import Depends, FastAPI, Response
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from shared.config import Settings, get_settings
 from shared.database.session import create_session_factory, init_database
@@ -30,7 +30,7 @@ def create_app(
     session_factory = session_factory or create_session_factory(resolved)
     owns_producer = producer is None
     producer = producer or KafkaProducerClient(resolved.kafka_bootstrap_servers, client_id="analytics-service")
-    handler = AnalyticsService()
+    handler = AnalyticsService(resolved.service_name)
     worker = KafkaWorker(
         service_name=resolved.service_name,
         bootstrap_servers=resolved.kafka_bootstrap_servers,
@@ -38,7 +38,7 @@ def create_app(
         group_id="analytics-service-group",
         handler=handler.handle_event,
         session_factory=session_factory,
-        producer=producer.producer,
+        producer=producer,
     )
 
     @asynccontextmanager
@@ -79,6 +79,10 @@ def create_app(
         response = await call_next(request)
         HTTP_REQUESTS.labels(resolved.service_name, request.url.path, request.method, str(response.status_code)).inc()
         return response
+
+    @app.get("/analytics/summary")
+    async def summary(session: AsyncSession = Depends(get_session)):
+        return await handler.get_summary(session)
 
     @app.get("/health")
     async def health(session: AsyncSession = Depends(get_session)):

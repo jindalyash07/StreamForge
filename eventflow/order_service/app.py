@@ -14,6 +14,7 @@ from shared.kafka.client import KafkaProducerClient
 from shared.logging.config import configure_logging
 from shared.logging.middleware import RequestContextMiddleware
 from shared.observability.metrics import HTTP_REQUESTS, SERVICE_HEALTH, metrics_payload
+from shared.outbox import OutboxRelay
 from shared.rate_limiting import RateLimitMiddleware
 
 from order_service.repository import OrderRepository
@@ -31,16 +32,29 @@ def create_app(
     session_factory = session_factory or create_session_factory(resolved)
     owns_producer = producer is None
     producer = producer or KafkaProducerClient(resolved.kafka_bootstrap_servers, client_id="order-service")
-    order_service = OrderService(OrderRepository(), producer)
+    order_service = OrderService(OrderRepository(), resolved.service_name)
+    relay = OutboxRelay(
+        service_name=resolved.service_name,
+        session_factory=session_factory,
+        producer=producer,
+        poll_interval_seconds=resolved.outbox_poll_interval_seconds,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await init_database(session_factory)
         if owns_producer:
             await producer.start()
+        relay_task = asyncio.create_task(relay.run())
         try:
             yield
         finally:
+            relay_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await relay_task
+            # Flush anything committed just before shutdown.
+            with suppress(Exception):
+                await relay.drain()
             if owns_producer:
                 await producer.stop()
 
@@ -72,6 +86,7 @@ def create_app(
     async def create_order(payload: CreateOrderRequest, session: AsyncSession = Depends(get_session)):
         response = await order_service.create_order(session, payload)
         await session.commit()
+        relay.notify()
         return JSONResponse(content=response.model_dump())
 
     @app.get("/orders/{order_id}")

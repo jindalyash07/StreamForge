@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,9 @@ class Settings(BaseSettings):
     metrics_path: str = "/metrics"
     rate_limit_per_minute: int = 120
     rate_limit_window_seconds: int = 60
+    outbox_poll_interval_seconds: float = 1.0
+    # Simulated payment provider: orders above this amount are declined.
+    payment_max_amount: Decimal = Decimal("100000")
 
 
 @lru_cache(maxsize=1)

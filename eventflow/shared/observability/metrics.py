@@ -33,6 +33,16 @@ SERVICE_HEALTH = Gauge(
     "Health status for the current service (1 healthy, 0 unhealthy)",
     ["service"],
 )
+OUTBOX_PUBLISHED = Counter(
+    "eventflow_outbox_published_total",
+    "Outbox events published to Kafka",
+    ["service", "topic"],
+)
+OUTBOX_PUBLISH_FAILURES = Counter(
+    "eventflow_outbox_publish_failures_total",
+    "Failed attempts to publish an outbox event",
+    ["service", "topic"],
+)
 
 
 def metrics_payload() -> tuple[bytes, str]:

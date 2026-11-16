@@ -9,6 +9,7 @@ from shared.kafka.client import KafkaProducerClient
 from shared.kafka.idempotency import claim_event
 from shared.kafka.topics import NOTIFICATION_SENT_TOPIC, PAYMENT_SUCCESS_TOPIC
 from shared.logging.middleware import correlation_id_var
+from shared.outbox import enqueue
 from shared.observability.metrics import EVENTS_PROCESSED, PROCESSING_LATENCY
 from shared.schemas.events import EventEnvelope, NotificationSentPayload, PaymentSuccessPayload
 
@@ -42,5 +43,5 @@ class NotificationService:
                     channel="email",
                 ).model_dump(mode="json"),
             )
-            await producer.send_event(NOTIFICATION_SENT_TOPIC, notification_event)
+            enqueue(session, NOTIFICATION_SENT_TOPIC, notification_event)
             EVENTS_PROCESSED.labels(self.service_name, PAYMENT_SUCCESS_TOPIC).inc()

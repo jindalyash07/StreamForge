@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Integer, Numeric, String, Text, UniqueConstraint, Uuid
+from typing import Any
+
+from sqlalchemy import JSON, DateTime, Integer, Numeric, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.database.base import Base
@@ -68,3 +70,24 @@ class AnalyticsSnapshot(Base):
     notification_sent_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     payment_success_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("0.00"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class OutboxEvent(Base):
+    """Events waiting to be published to Kafka.
+
+    Rows are written in the same transaction as the business change that caused them,
+    then published by ``shared.outbox.OutboxRelay``. This removes the dual write where a
+    crash between the database commit and the Kafka publish loses (or duplicates) an event.
+    """
+
+    __tablename__ = "outbox_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    source: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    topic: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    publish_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
